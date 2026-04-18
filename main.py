@@ -5,22 +5,35 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# 🔹 Настройка логирования (видно в Railway)
+# 🔹 Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# 🔹 Загрузка переменных из Railway
+# 🔹 Загрузка переменных
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not BOT_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("❌ BOT_TOKEN или GEMINI_API_KEY не найдены в переменных Railway!")
+    raise ValueError("❌ BOT_TOKEN или GEMINI_API_KEY не найдены!")
 
-#  Настройка Gemini
+#  Правильная настройка Gemini
 genai.configure(api_key=GEMINI_API_KEY)
+
+# Настройки безопасности
+safety_settings = {
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_MEDICAL: HarmBlockThreshold.BLOCK_NONE,
+}
+
 model = genai.GenerativeModel(
     model_name="gemini-2.0-flash",
-    generation_config={"temperature": 0.3, "max_output_tokens": 1500},
+    generation_config={
+        "temperature": 0.3,
+        "max_output_tokens": 1500,
+    },
+    safety_settings=safety_settings
 )
 
 bot = Bot(BOT_TOKEN)
@@ -39,14 +52,28 @@ def get_main_keyboard():
 
 async def get_ai_response(prompt: str, image_bytes: bytes = None):
     try:
-        parts = [{"text": prompt}]
+        logging.info(f"📤 Отправляю запрос в Gemini: {prompt[:50]}...")
+        
         if image_bytes:
-            parts.append({"mime_type": "image/jpeg", "data": image_bytes})
-        response = await asyncio.to_thread(model.generate_content, parts)
+            # Для изображений создаём правильный Part
+            from google.generativeai.types import Part
+            image_part = Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+            response = await asyncio.to_thread(
+                model.generate_content,
+                [image_part, prompt]
+            )
+        else:
+            response = await asyncio.to_thread(
+                model.generate_content,
+                prompt
+            )
+        
+        logging.info("✅ Gemini ответил успешно")
         return response.text.strip() + DISCLAIMER
+        
     except Exception as e:
-        logging.error(f"Gemini xatosi: {e}")
-        return "❌ Server xatosi. Iltimos, qayta urinib ko'ring." + DISCLAIMER
+        logging.error(f"❌ Gemini xatosi: {e}")
+        return f"⚠️ AI xizmati vaqtincha ishlamayapti. Keyinroq urinib ko'ring.\n\nXatolik: {str(e)[:100]}" + DISCLAIMER
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -73,25 +100,26 @@ async def handle_photo(message: types.Message):
         photo = message.photo[-1]
         file = await bot.download(photo.file_id)
         image_bytes = file.read()
+        logging.info(f"📸 Surat olindi: {len(image_bytes)} bytes")
+        
         prompt = "Bu suratdagi dori vositasini aniqla va to'liq ma'lumot ber: nomi, tarkibi, qo'llanilishi, dozasi, nojo'ya ta'sirlari, kontrendikatsiyalari va muqobillari."
         response = await get_ai_response(prompt, image_bytes)
         await message.answer(response, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Photo error: {e}")
-        await message.answer("❌ Suratni tahlil qilishda xatolik. Iltimos, aniqroq rasm yuboring." + DISCLAIMER)
+        await message.answer("❌ Suratni tahlil qilishda xatolik." + DISCLAIMER)
 
 @dp.message(F.text & ~F.photo)
 async def handle_text(message: types.Message):
     if message.text.startswith("/"): return
     await bot.send_chat_action(message.chat.id, "typing")
 
-    # Автоматическое определение типа запроса
     if "," in message.text and len(message.text.split(",")) >= 2:
         prompt = f"Dorilar birgalikda qo'llanilsa nima bo'ladi? Xavf, nojo'ya ta'sirlar, ehtiyot choralari: {message.text}"
-    elif any(word in message.text.lower() for word in ["belgi", "og'riq", "harorat", "yo'tal", "alomat", "kasallik"]):
-        prompt = f"Belgilar: {message.text}. Mumkin bo'lgan holatlar, qachon shifokorga borish kerak, o'z-o'zini davolashdan ogohlantirish."
+    elif any(word in message.text.lower() for word in ["belgi", "og'riq", "harorat", "yo'tal", "alomat"]):
+        prompt = f"Belgilar: {message.text}. Mumkin bo'lgan holatlar, qachon shifokorga borish kerak."
     else:
-        prompt = f"Foydalanuvchi '{message.text}' haqida so'ramoqda. Dori sifatida tahlil qiling va batafsil ma'lumot bering."
+        prompt = f"'{message.text}' haqida to'liq ma'lumot ber: tarkibi, qo'llanilishi, dozasi, nojo'ya ta'sirlari, kontrendikatsiyalari."
 
     response = await get_ai_response(prompt)
     await message.answer(response, parse_mode="Markdown")
