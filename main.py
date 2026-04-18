@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import google.generativeai as genai
+from google.ai.generativelanguage_v1beta.types import content as glm_content
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -14,7 +15,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not BOT_TOKEN or not GEMINI_API_KEY:
     raise ValueError("❌ BOT_TOKEN или GEMINI_API_KEY не найдены!")
 
-# ✅ Убраны устаревшие настройки безопасности, которые ломали бот
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(
     model_name="gemini-2.0-flash",
@@ -37,13 +37,18 @@ def get_main_keyboard():
 async def get_ai_response(prompt: str, image_bytes: bytes = None):
     try:
         if image_bytes:
-            from google.generativeai.types import Part
-            image_part = Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+            # ✅ Правильный способ создания Part для изображений
+            image_part = glm_content.Part(inline_data=glm_content.Blob(mime_type="image/jpeg", data=image_bytes))
             response = await asyncio.to_thread(model.generate_content, [image_part, prompt])
         else:
             response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip() + DISCLAIMER
+        
     except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "quota" in error_msg.lower():
+            logging.warning("⏳ Превышен лимит Gemini API. Ждём 60 секунд...")
+            return "⏳ **AI xizmati band.** Bir daqiqadan so'ng qayta urinib ko'ring (API limiti).\n\n" + DISCLAIMER
         logging.error(f"Gemini xatosi: {e}")
         return f"️ AI xizmati vaqtincha ishlamayapti.\n\n{str(e)[:100]}" + DISCLAIMER
 
@@ -110,3 +115,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
