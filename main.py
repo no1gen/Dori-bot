@@ -5,41 +5,25 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# 🔹 Настройка логирования
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# 🔹 Загрузка переменных
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not BOT_TOKEN or not GEMINI_API_KEY:
     raise ValueError("❌ BOT_TOKEN или GEMINI_API_KEY не найдены!")
 
-#  Правильная настройка Gemini
+# ✅ Убраны устаревшие настройки безопасности, которые ломали бот
 genai.configure(api_key=GEMINI_API_KEY)
-
-# Настройки безопасности
-safety_settings = {
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_MEDICAL: HarmBlockThreshold.BLOCK_NONE,
-}
-
 model = genai.GenerativeModel(
     model_name="gemini-2.0-flash",
-    generation_config={
-        "temperature": 0.3,
-        "max_output_tokens": 1500,
-    },
-    safety_settings=safety_settings
+    generation_config={"temperature": 0.3, "max_output_tokens": 1500}
 )
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-
-DISCLAIMER = "\n⚠️ **ESLATMA:** Bu ma'lumotlar faqat tanishuv uchun. Dori qabul qilishdan oldin shifokor yoki farmatsevt bilan maslahatlashing. O'z-o'zingizni davolamang."
+DISCLAIMER = "\n⚠️ **ESLATMA:** Bu ma'lumotlar faqat tanishuv uchun. Dori qabul qilishdan oldin shifokor yoki farmatsevt bilan maslahatlashing."
 
 def get_main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -52,40 +36,24 @@ def get_main_keyboard():
 
 async def get_ai_response(prompt: str, image_bytes: bytes = None):
     try:
-        logging.info(f"📤 Отправляю запрос в Gemini: {prompt[:50]}...")
-        
         if image_bytes:
-            # Для изображений создаём правильный Part
             from google.generativeai.types import Part
             image_part = Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-            response = await asyncio.to_thread(
-                model.generate_content,
-                [image_part, prompt]
-            )
+            response = await asyncio.to_thread(model.generate_content, [image_part, prompt])
         else:
-            response = await asyncio.to_thread(
-                model.generate_content,
-                prompt
-            )
-        
-        logging.info("✅ Gemini ответил успешно")
+            response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip() + DISCLAIMER
-        
     except Exception as e:
-        logging.error(f"❌ Gemini xatosi: {e}")
-        return f"⚠️ AI xizmati vaqtincha ishlamayapti. Keyinroq urinib ko'ring.\n\nXatolik: {str(e)[:100]}" + DISCLAIMER
+        logging.error(f"Gemini xatosi: {e}")
+        return f"️ AI xizmati vaqtincha ishlamayapti.\n\n{str(e)[:100]}" + DISCLAIMER
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(
-        " Assalomu alaykum! Men **Dori haqida** botman.\n\n"
-        "💊 Dori haqida ma'lumot, suratdan tahlil, dori mosligi va belgilarni tekshirish uchun tugmalardan foydalaning.",
-        reply_markup=get_main_keyboard(), parse_mode="Markdown"
-    )
+    await message.answer("👋 Assalomu alaykum! Men **Dori haqida** botman.\n\n💊 Tugmalardan foydalaning.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "search_name")
 async def cb_search_name(callback: types.CallbackQuery):
-    await callback.message.answer(" Dori nomini yozing (masalan: Paratsetamol, Ibuprofen...)")
+    await callback.message.answer("💊 Dori nomini yozing (masalan: Paratsetamol, Ibuprofen...)")
     await callback.answer()
 
 @dp.callback_query(F.data == "search_photo")
@@ -100,8 +68,6 @@ async def handle_photo(message: types.Message):
         photo = message.photo[-1]
         file = await bot.download(photo.file_id)
         image_bytes = file.read()
-        logging.info(f"📸 Surat olindi: {len(image_bytes)} bytes")
-        
         prompt = "Bu suratdagi dori vositasini aniqla va to'liq ma'lumot ber: nomi, tarkibi, qo'llanilishi, dozasi, nojo'ya ta'sirlari, kontrendikatsiyalari va muqobillari."
         response = await get_ai_response(prompt, image_bytes)
         await message.answer(response, parse_mode="Markdown")
@@ -113,33 +79,24 @@ async def handle_photo(message: types.Message):
 async def handle_text(message: types.Message):
     if message.text.startswith("/"): return
     await bot.send_chat_action(message.chat.id, "typing")
-
     if "," in message.text and len(message.text.split(",")) >= 2:
         prompt = f"Dorilar birgalikda qo'llanilsa nima bo'ladi? Xavf, nojo'ya ta'sirlar, ehtiyot choralari: {message.text}"
-    elif any(word in message.text.lower() for word in ["belgi", "og'riq", "harorat", "yo'tal", "alomat"]):
+    elif any(w in message.text.lower() for w in ["belgi", "og'riq", "harorat", "yo'tal", "alomat"]):
         prompt = f"Belgilar: {message.text}. Mumkin bo'lgan holatlar, qachon shifokorga borish kerak."
     else:
         prompt = f"'{message.text}' haqida to'liq ma'lumot ber: tarkibi, qo'llanilishi, dozasi, nojo'ya ta'sirlari, kontrendikatsiyalari."
-
     response = await get_ai_response(prompt)
     await message.answer(response, parse_mode="Markdown")
 
-@dp.callback_query(F.data == "check_interaction")
-async def cb_interaction(callback: types.CallbackQuery):
-    await callback.message.answer("🔄 2 yoki undan ortiq dori nomini vergul bilan yozing:\n`Aspirin, Ibuprofen`", parse_mode="Markdown")
-    await callback.answer()
-
-@dp.callback_query(F.data == "check_symptoms")
-async def cb_symptoms(callback: types.CallbackQuery):
-    await callback.message.answer("🤒 Belgilaringizni yozing:\n`32 yosh, bosh og'rig'i, harorat 38`", parse_mode="Markdown")
+@dp.callback_query(F.data.in_({"check_interaction", "check_symptoms"}))
+async def cb_input(callback: types.CallbackQuery):
+    txt = "🔄 2 yoki undan ortiq dori nomini vergul bilan yozing:\n`Aspirin, Ibuprofen`" if callback.data == "check_interaction" else "🤒 Belgilaringizni yozing:\n`32 yosh, bosh og'rig'i, harorat 38`"
+    await callback.message.answer(txt, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "emergency")
 async def cb_emergency(callback: types.CallbackQuery):
-    await callback.message.answer(
-        "🚑 **Shoshilinch raqamlar (O'zbekiston):**\n📞 103 – Tez yordam\n 112 – Yagona qutqaruv\n\n⚠️ Og'ir holatda darhol shifoxonaga boring!",
-        parse_mode="Markdown"
-    )
+    await callback.message.answer("🚑 **Shoshilinch raqamlar (O'zbekiston):**\n📞 103 – Tez yordam\n 112 – Yagona qutqaruv\n\n⚠️ Og'ir holatda darhol shifoxonaga boring!", parse_mode="Markdown")
     await callback.answer()
 
 @dp.errors()
@@ -148,7 +105,7 @@ async def error_handler(event: types.ErrorEvent):
 
 async def main():
     print("✅ Dori haqida bot ishga tushdi...")
-    logging.info("✅ Bot started successfully! Waiting for messages...")
+    logging.info("✅ Bot started successfully!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
